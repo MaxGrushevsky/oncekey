@@ -1,5 +1,12 @@
-export { Idempotency } from "./idempotency.js";
-export { fingerprint, buildStorageKey, assertValidKey } from "./fingerprint.js";
+export {
+  Idempotency,
+  fingerprint,
+  buildStorageKey,
+  assertValidKey,
+  canonicalizeJson,
+  maybeCanonicalBody,
+  validateKey,
+} from "./idempotency.js";
 export {
   IdempotencyError,
   MissingKeyError,

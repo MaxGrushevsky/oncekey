@@ -1,7 +1,7 @@
 {
   "name": "oncekey",
-  "version": "0.1.0",
-  "description": "Stripe-style Idempotency-Key for Node: one key, one side effect, same response on retry. Memory, SQLite, Postgres, plus Fetch/Express/Hono adapters.",
+  "version": "0.2.0",
+  "description": "Stripe-style Idempotency-Key for Node. Stores: Memory, SQLite, Postgres, Redis. Adapters: Fetch, Express, Hono, Fastify, Koa.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,6 +18,10 @@
       "types": "./dist/postgres.d.ts",
       "import": "./dist/postgres.js"
     },
+    "./redis": {
+      "types": "./dist/redis.d.ts",
+      "import": "./dist/redis.js"
+    },
     "./express": {
       "types": "./dist/express.d.ts",
       "import": "./dist/express.js"
@@ -25,6 +29,14 @@
     "./hono": {
       "types": "./dist/hono.d.ts",
       "import": "./dist/hono.js"
+    },
+    "./fastify": {
+      "types": "./dist/fastify.d.ts",
+      "import": "./dist/fastify.js"
+    },
+    "./koa": {
+      "types": "./dist/koa.d.ts",
+      "import": "./dist/koa.js"
     }
   },
   "files": [
@@ -45,12 +57,18 @@
   },
   "peerDependencies": {
     "express": ">=4",
+    "fastify": ">=4",
     "hono": ">=4",
+    "ioredis": ">=5",
+    "koa": ">=2",
     "pg": ">=8"
   },
   "peerDependenciesMeta": {
     "express": { "optional": true },
+    "fastify": { "optional": true },
     "hono": { "optional": true },
+    "ioredis": { "optional": true },
+    "koa": { "optional": true },
     "pg": { "optional": true }
   },
   "keywords": [
@@ -61,7 +79,10 @@
     "payments",
     "express",
     "hono",
+    "fastify",
+    "koa",
     "postgres",
+    "redis",
     "sqlite"
   ],
   "license": "MIT",
@@ -75,11 +96,18 @@
   "homepage": "https://github.com/MaxGrushevsky/oncekey#readme",
   "devDependencies": {
     "@types/express": "^5.0.1",
+    "@types/koa": "^3.0.3",
     "@types/node": "^22.13.10",
     "@types/pg": "^8.11.11",
+    "@types/supertest": "^7.2.1",
     "express": "^5.1.0",
+    "fastify": "^5.12.5",
     "hono": "^4.7.5",
+    "ioredis": "^6.0.0",
+    "ioredis-mock": "^8.13.1",
+    "koa": "^3.2.1",
     "pg": "^8.14.1",
+    "supertest": "^7.3.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }

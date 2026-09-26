@@ -110,4 +110,18 @@ export type IdempotencyOptions = {
    * Authorization / cookie style headers are never stored.
    */
   headerFilter?: (name: string, value: string) => boolean;
+  /**
+   * Normalize JSON request bodies before fingerprinting so key order does not
+   * matter. Default: false (raw bytes / string as sent).
+   */
+  canonicalJson?: boolean;
+  /**
+   * When another request holds the key, wait up to this many ms for a replay
+   * instead of immediately returning 409. Default: 0 (fail fast).
+   */
+  waitMs?: number;
+  /** Poll interval while waiting. Default: 50ms. */
+  waitPollMs?: number;
+  /** Max Idempotency-Key length. Default: 255. */
+  maxKeyLength?: number;
 };

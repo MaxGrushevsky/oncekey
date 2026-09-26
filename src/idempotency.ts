@@ -8,6 +8,7 @@ import {
   assertValidKey,
   buildStorageKey,
   fingerprint as hashFingerprint,
+  validateKey,
 } from "./fingerprint.js";
 import type {
   FingerprintInput,
@@ -65,6 +66,10 @@ function toStoredResponse(
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class Idempotency {
   private readonly store: IdempotencyOptions["store"];
   private readonly ttlMs: number;
@@ -72,6 +77,10 @@ export class Idempotency {
   private readonly now: () => number;
   private readonly shouldStore: (statusCode: number) => boolean;
   private readonly headerFilter: (name: string, value: string) => boolean;
+  private readonly canonicalJson: boolean;
+  private readonly waitMs: number;
+  private readonly waitPollMs: number;
+  private readonly maxKeyLength: number;
 
   constructor(options: IdempotencyOptions) {
     this.store = options.store;
@@ -80,15 +89,14 @@ export class Idempotency {
     this.now = options.now ?? Date.now;
     this.shouldStore = options.shouldStore ?? defaultShouldStore;
     this.headerFilter = options.headerFilter ?? defaultHeaderFilter;
+    this.canonicalJson = options.canonicalJson ?? false;
+    this.waitMs = options.waitMs ?? 0;
+    this.waitPollMs = options.waitPollMs ?? 50;
+    this.maxKeyLength = options.maxKeyLength ?? 255;
   }
 
   /**
    * Run `handler` at most once for the given idempotency key.
-   *
-   * @param key - Value of the Idempotency-Key header
-   * @param request - Material used for the fingerprint
-   * @param handler - Side-effecting work (create charge, insert order, …)
-   * @param scope - Tenant / user boundary so keys never collide across accounts
    */
   async run(
     key: string | null | undefined,
@@ -100,63 +108,84 @@ export class Idempotency {
       throw new MissingKeyError();
     }
     const trimmed = key.trim();
-    try {
-      assertValidKey(trimmed);
-    } catch {
+    const validation = validateKey(trimmed, this.maxKeyLength);
+    if (validation === "empty") {
+      throw new MissingKeyError();
+    }
+    if (validation) {
       throw new InvalidKeyError();
     }
+    // keep assert for type narrowing / future rules
+    assertValidKey(trimmed, this.maxKeyLength);
 
-    const fp = hashFingerprint(request);
-    const storageKey = buildStorageKey(scope, trimmed);
-    const now = this.now();
-
-    const claim = await this.store.claim({
-      storageKey,
-      fingerprint: fp,
-      now,
-      ttlMs: this.ttlMs,
-      leaseMs: this.leaseMs,
+    const fp = hashFingerprint(request, {
+      canonicalJson: this.canonicalJson,
     });
+    const storageKey = buildStorageKey(scope, trimmed);
+    const deadline = this.now() + this.waitMs;
 
-    if (claim.kind === "replay") {
-      if (!claim.record.response) {
-        throw new Error("idempotency store returned replay without response");
+    for (;;) {
+      const now = this.now();
+      const claim = await this.store.claim({
+        storageKey,
+        fingerprint: fp,
+        now,
+        ttlMs: this.ttlMs,
+        leaseMs: this.leaseMs,
+      });
+
+      if (claim.kind === "replay") {
+        if (!claim.record.response) {
+          throw new Error("idempotency store returned replay without response");
+        }
+        return { replayed: true, response: claim.record.response };
       }
-      return { replayed: true, response: claim.record.response };
-    }
 
-    if (claim.kind === "mismatch") {
-      throw new KeyMismatchError();
-    }
+      if (claim.kind === "mismatch") {
+        throw new KeyMismatchError();
+      }
 
-    if (claim.kind === "in_progress") {
-      throw new InProgressError(
-        Math.max(1, Math.ceil(this.leaseMs / 1000 / 4)),
-      );
-    }
+      if (claim.kind === "in_progress") {
+        if (this.waitMs > 0 && this.now() < deadline) {
+          await sleep(this.waitPollMs);
+          continue;
+        }
+        throw new InProgressError(
+          Math.max(1, Math.ceil(this.leaseMs / 1000 / 4)),
+        );
+      }
 
-    try {
-      const result = await handler();
-      const stored = toStoredResponse(result, this.headerFilter);
+      // acquired
+      try {
+        const result = await handler();
+        const stored = toStoredResponse(result, this.headerFilter);
 
-      if (this.shouldStore(stored.statusCode)) {
-        await this.store.complete({
-          storageKey,
-          fingerprint: fp,
-          response: stored,
-          now: this.now(),
-          ttlMs: this.ttlMs,
-        });
-      } else {
+        if (this.shouldStore(stored.statusCode)) {
+          await this.store.complete({
+            storageKey,
+            fingerprint: fp,
+            response: stored,
+            now: this.now(),
+            ttlMs: this.ttlMs,
+          });
+        } else {
+          await this.store.abandon({ storageKey, fingerprint: fp });
+        }
+
+        return { replayed: false, response: stored };
+      } catch (err) {
         await this.store.abandon({ storageKey, fingerprint: fp });
+        throw err;
       }
-
-      return { replayed: false, response: stored };
-    } catch (err) {
-      await this.store.abandon({ storageKey, fingerprint: fp });
-      throw err;
     }
   }
 }
 
-export { fingerprint, buildStorageKey, assertValidKey } from "./fingerprint.js";
+export {
+  fingerprint,
+  buildStorageKey,
+  assertValidKey,
+  canonicalizeJson,
+  maybeCanonicalBody,
+  validateKey,
+} from "./fingerprint.js";

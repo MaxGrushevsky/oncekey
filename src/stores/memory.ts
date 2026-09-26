@@ -8,9 +8,35 @@ import type {
 /**
  * In-process store. Fine for tests and a single Node process.
  * Keys are lost on restart. Do not use behind multiple instances.
+ *
+ * Per-key operations are serialized so overlapping async claims cannot
+ * double-acquire inside one process.
  */
 export class MemoryStore implements IdempotencyStore {
   private readonly records = new Map<string, IdempotencyRecord>();
+  private readonly locks = new Map<string, Promise<void>>();
+
+  private async withKeyLock<T>(
+    storageKey: string,
+    fn: () => T | Promise<T>,
+  ): Promise<T> {
+    const prev = this.locks.get(storageKey) ?? Promise.resolve();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = prev.then(() => held);
+    this.locks.set(storageKey, tail);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.locks.get(storageKey) === tail) {
+        this.locks.delete(storageKey);
+      }
+    }
+  }
 
   async claim(input: {
     storageKey: string;
@@ -19,40 +45,46 @@ export class MemoryStore implements IdempotencyStore {
     ttlMs: number;
     leaseMs: number;
   }): Promise<ClaimResult> {
-    const existing = this.records.get(input.storageKey);
+    return this.withKeyLock(input.storageKey, () => {
+      const existing = this.records.get(input.storageKey);
 
-    if (!existing || existing.expiresAt <= input.now) {
-      const record = newProcessing(
-        input.storageKey,
-        input.fingerprint,
-        input.now,
-        input.ttlMs,
-      );
-      this.records.set(input.storageKey, record);
-      return { kind: "acquired" };
-    }
+      if (!existing || existing.expiresAt <= input.now) {
+        this.records.set(
+          input.storageKey,
+          newProcessing(
+            input.storageKey,
+            input.fingerprint,
+            input.now,
+            input.ttlMs,
+          ),
+        );
+        return { kind: "acquired" as const };
+      }
 
-    if (existing.fingerprint !== input.fingerprint) {
-      return { kind: "mismatch", record: clone(existing) };
-    }
+      if (existing.fingerprint !== input.fingerprint) {
+        return { kind: "mismatch" as const, record: clone(existing) };
+      }
 
-    if (existing.status === "completed" && existing.response) {
-      return { kind: "replay", record: clone(existing) };
-    }
+      if (existing.status === "completed" && existing.response) {
+        return { kind: "replay" as const, record: clone(existing) };
+      }
 
-    const leaseDead = existing.lockedAt + input.leaseMs <= input.now;
-    if (existing.status === "processing" && leaseDead) {
-      const record = newProcessing(
-        input.storageKey,
-        input.fingerprint,
-        input.now,
-        input.ttlMs,
-      );
-      this.records.set(input.storageKey, record);
-      return { kind: "acquired" };
-    }
+      const leaseDead = existing.lockedAt + input.leaseMs <= input.now;
+      if (existing.status === "processing" && leaseDead) {
+        this.records.set(
+          input.storageKey,
+          newProcessing(
+            input.storageKey,
+            input.fingerprint,
+            input.now,
+            input.ttlMs,
+          ),
+        );
+        return { kind: "acquired" as const };
+      }
 
-    return { kind: "in_progress", record: clone(existing) };
+      return { kind: "in_progress" as const, record: clone(existing) };
+    });
   }
 
   async complete(input: {
@@ -62,21 +94,23 @@ export class MemoryStore implements IdempotencyStore {
     now: number;
     ttlMs: number;
   }): Promise<void> {
-    const existing = this.records.get(input.storageKey);
-    if (!existing || existing.fingerprint !== input.fingerprint) return;
-    if (existing.status === "completed") return;
+    await this.withKeyLock(input.storageKey, () => {
+      const existing = this.records.get(input.storageKey);
+      if (!existing || existing.fingerprint !== input.fingerprint) return;
+      if (existing.status === "completed") return;
 
-    this.records.set(input.storageKey, {
-      ...existing,
-      status: "completed",
-      response: {
-        statusCode: input.response.statusCode,
-        headers: { ...input.response.headers },
-        body: input.response.body,
-      },
-      updatedAt: input.now,
-      expiresAt: input.now + input.ttlMs,
-      lockedAt: input.now,
+      this.records.set(input.storageKey, {
+        ...existing,
+        status: "completed",
+        response: {
+          statusCode: input.response.statusCode,
+          headers: { ...input.response.headers },
+          body: input.response.body,
+        },
+        updatedAt: input.now,
+        expiresAt: input.now + input.ttlMs,
+        lockedAt: input.now,
+      });
     });
   }
 
@@ -84,11 +118,13 @@ export class MemoryStore implements IdempotencyStore {
     storageKey: string;
     fingerprint: string;
   }): Promise<void> {
-    const existing = this.records.get(input.storageKey);
-    if (!existing) return;
-    if (existing.fingerprint !== input.fingerprint) return;
-    if (existing.status === "completed") return;
-    this.records.delete(input.storageKey);
+    await this.withKeyLock(input.storageKey, () => {
+      const existing = this.records.get(input.storageKey);
+      if (!existing) return;
+      if (existing.fingerprint !== input.fingerprint) return;
+      if (existing.status === "completed") return;
+      this.records.delete(input.storageKey);
+    });
   }
 
   async get(storageKey: string): Promise<IdempotencyRecord | null> {

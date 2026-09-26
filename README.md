@@ -2,27 +2,25 @@
 
 Stripe-style `Idempotency-Key` for Node.js.
 
-If a client retries a POST, your handler should not create a second order or
-charge twice. `oncekey` stores the first response under the key and returns it
-again.
+Retries and double-clicks should not create a second order or charge. `oncekey`
+runs your handler once per key and replays the stored response.
 
-This is a library, not a hosted service. Keys live in a store you choose.
+Library only — no hosted service. You pick the store.
 
-**Package name:** `oncekey` (the npm name `idempotency-key` is already taken by
-another project with a similar goal).
+Repository: https://github.com/MaxGrushevsky/oncekey
 
-Requires Node 22+ for the SQLite adapter (`node:sqlite`). Core + Memory + HTTP
-adapters work on Node 20+ if you skip SQLite.
+Requires **Node 22+** (SQLite uses `node:sqlite`).
 
 ## Install
 
 ```bash
 npm install oncekey
+```
 
-# optional, depending on what you use:
-npm install pg          # Postgres store
-npm install express     # Express adapter
-npm install hono        # Hono adapter
+Optional peers depending on adapters/stores:
+
+```bash
+npm install pg ioredis express hono fastify koa
 ```
 
 ## Quick start
@@ -43,36 +41,37 @@ const result = await idem.run(
 );
 ```
 
+Useful options:
+
+- `canonicalJson: true` — fingerprint ignores JSON key order
+- `waitMs: 1000` — wait for an in-flight twin instead of immediate `409`
+
 ## Stores
 
-| Store | Import | Notes |
-|-------|--------|--------|
-| Memory | `oncekey` | Tests / single process |
-| SQLite file | `oncekey/sqlite` | No DB server; Node 22+ |
-| Postgres | `oncekey/postgres` | Multi-instance; needs `pg` |
-| Custom | implement `IdempotencyStore` | Redis, etc. |
+| Store | Import | When |
+|-------|--------|------|
+| Memory | `oncekey` | tests, single process |
+| SQLite | `oncekey/sqlite` | file on disk, no DB server |
+| Postgres | `oncekey/postgres` | multi-instance (`pg`) |
+| Redis | `oncekey/redis` | multi-instance (`ioredis`, Lua claim) |
 
 ```ts
 import { SqliteStore } from "oncekey/sqlite";
 import { PostgresStore } from "oncekey/postgres";
-import pg from "pg";
-
-const sqlite = new SqliteStore({ path: "data/oncekey.sqlite" });
-
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-const postgres = new PostgresStore({ pool });
-await postgres.ready();
+import { RedisStore } from "oncekey/redis";
 ```
 
-## HTTP adapters
+## Adapters
 
-| Adapter | Import | Fits |
-|---------|--------|------|
-| Fetch `protect` | `oncekey` | Next.js App Router, plain Request/Response |
-| Express | `oncekey/express` | Express 4/5 route handlers |
-| Hono | `oncekey/hono` | Hono middleware |
+| Adapter | Import |
+|---------|--------|
+| Fetch / Next.js | `protect` from `oncekey` |
+| Express | `oncekey/express` |
+| Hono | `oncekey/hono` |
+| Fastify | `oncekey/fastify` |
+| Koa | `oncekey/koa` |
 
-### Next.js / Fetch
+### Next.js
 
 ```ts
 import { Idempotency, protect } from "oncekey";
@@ -84,71 +83,74 @@ const idempotency = new Idempotency({
 
 export const POST = protect(
   { idempotency, scope: () => "tenant" },
-  async (request) => {
-    const body = await request.json();
-    return Response.json({ id: "ord_1", ...body }, { status: 201 });
-  },
+  async (request) => Response.json(await createOrder(request), { status: 201 }),
 );
 ```
 
 ### Express
 
 ```ts
-import express from "express";
-import { Idempotency, MemoryStore } from "oncekey";
 import { expressIdempotency } from "oncekey/express";
-
-const idempotency = new Idempotency({ store: new MemoryStore() });
-const app = express();
-app.use(express.json());
 
 app.post(
   "/orders",
-  expressIdempotency({ idempotency, scope: (req) => req.header("x-tenant") ?? "" })(
-    async (req, res) => {
-      res.status(201).json({ id: "ord_1", sku: req.body.sku });
-    },
-  ),
+  express.json(),
+  expressIdempotency({ idempotency })(async (req, res) => {
+    res.status(201).json({ id: "ord_1" });
+  }),
 );
 ```
 
 ### Hono
 
 ```ts
-import { Hono } from "hono";
-import { Idempotency, MemoryStore } from "oncekey";
 import { honoIdempotency } from "oncekey/hono";
 
-const idempotency = new Idempotency({ store: new MemoryStore() });
-const app = new Hono();
-
-app.post(
-  "/orders",
-  honoIdempotency({ idempotency }),
-  async (c) => c.json({ id: "ord_1" }, 201),
+app.post("/orders", honoIdempotency({ idempotency }), async (c) =>
+  c.json({ id: "ord_1" }, 201),
 );
 ```
 
-## Behaviour (short)
+### Fastify
+
+```ts
+import { fastifyIdempotency } from "oncekey/fastify";
+
+fastify.post(
+  "/orders",
+  fastifyIdempotency({ idempotency })(async (req, reply) =>
+    reply.code(201).send({ id: "ord_1" }),
+  ),
+);
+```
+
+### Koa
+
+```ts
+import { koaIdempotency } from "oncekey/koa";
+
+router.post("/orders", koaIdempotency({ idempotency }), async (ctx) => {
+  ctx.status = 201;
+  ctx.body = { id: "ord_1" };
+});
+```
+
+## Behaviour
 
 | Case | Result |
 |------|--------|
 | First request | Handler runs; response stored |
 | Same key + same body | Replay; `Idempotent-Replay: true` |
 | Same key + different body | `422 key_mismatch` |
-| In flight | `409 in_progress` |
+| In flight | `409 in_progress` (or wait if `waitMs` set) |
 | Handler throws / 5xx | Key abandoned; retry may run again |
-| TTL (default 24h) | Key may be reused after expiry |
+| TTL (default 24h) | Key reusable after expiry |
 
-More detail: [docs/how-it-works.md](docs/how-it-works.md).
+Details: [docs/how-it-works.md](docs/how-it-works.md), [docs/stores.md](docs/stores.md), [docs/http.md](docs/http.md).
 
 ## Maturity
 
-v0.1. Automated tests cover core semantics, SQLite, Express, Hono, concurrency,
-and a fake Postgres driver. A live Postgres test runs only when `DATABASE_URL`
-is set. This is useful and working for the covered paths — it is not a claim of
-production battle-testing at Stripe scale. Read the docs, run the tests, try it
-on a staging route before relying on it for money movement.
+v0.2 — automated tests for core, stores (Memory/SQLite/Postgres fake/Redis mock), and adapters (Fetch/Express/Hono/Fastify/Koa). Live Postgres runs when `DATABASE_URL` is set. Use on staging before money paths.
 
 ## Development
 
