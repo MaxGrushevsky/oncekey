@@ -1,0 +1,86 @@
+{
+  "name": "oncekey",
+  "version": "0.1.0",
+  "description": "Stripe-style Idempotency-Key for Node: one key, one side effect, same response on retry. Memory, SQLite, Postgres, plus Fetch/Express/Hono adapters.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "import": "./dist/hono.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "express": ">=4",
+    "hono": ">=4",
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "express": { "optional": true },
+    "hono": { "optional": true },
+    "pg": { "optional": true }
+  },
+  "keywords": [
+    "idempotency",
+    "idempotency-key",
+    "http",
+    "retry",
+    "payments",
+    "express",
+    "hono",
+    "postgres",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MaxGrushevsky/oncekey.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MaxGrushevsky/oncekey/issues"
+  },
+  "homepage": "https://github.com/MaxGrushevsky/oncekey#readme",
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.11.11",
+    "express": "^5.1.0",
+    "hono": "^4.7.5",
+    "pg": "^8.14.1",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}
